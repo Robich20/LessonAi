@@ -1,5 +1,5 @@
 // Minimal service worker: lets the app shell open with bad school Wi-Fi. API calls always go to the network.
-const CACHE = 'lessonai-v6';
+const CACHE = 'lessonai-v7';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icon-192.png', 'vendor/marked.min.js', 'vendor/purify.min.js'];
 
 self.addEventListener('install', (e) => {

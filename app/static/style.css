@@ -251,3 +251,80 @@ audio { width: 100%; margin: 6px 0; }
 ol.points { padding-left: 22px; }
 details.diagram-error { margin: 12px 0; color: var(--muted); font-size: 13px; }
 details.diagram-error summary { cursor: pointer; }
+
+/* ---------- konspekt table of contents ---------- */
+.doc-main :is(h1, h2, h3) { scroll-margin-top: 84px; }
+.toc { display: none; }
+.toc .label { padding: 0 10px 8px; }
+.toc a, .toc-list a { display: block; padding: 5px 10px; border-left: 2px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.35; text-decoration: none; }
+.toc a:hover, .toc-list a:hover { color: var(--text); background: var(--surface2); }
+.toc a.l2, .toc-list a.l2 { padding-left: 20px; }
+.toc a.l3, .toc-list a.l3 { padding-left: 30px; font-size: 12.5px; }
+.toc a.l1, .toc-list a.l1 { color: var(--text); font-weight: 600; margin-top: 6px; }
+.toc a.on, .toc-list a.on { color: var(--accent); border-left-color: var(--accent); }
+.toc-fab {
+  position: fixed; right: 16px; bottom: calc(var(--safe-b) + 76px); z-index: 9;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .12); border-radius: 99px; padding: 9px 14px;
+}
+.toc-fab .ic { width: 16px; height: 16px; }
+.toc-sheet { max-height: 75vh; overflow-y: auto; }
+.toc-list a { font-size: 15px; padding: 9px 12px; }
+.toc-list a.l3 { font-size: 14px; }
+@media (min-width: 960px) { .toc-fab { bottom: 24px; right: 24px; } }
+@media (min-width: 1200px) {
+  .doc { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 40px; align-items: start; }
+  .toc { display: block; position: sticky; top: 84px; max-height: calc(100vh - 110px); overflow-y: auto; padding-top: 24px; scrollbar-width: thin; }
+  .toc-fab { display: none; }
+}
+
+ol.questions li { margin: 8px 0; }
+ol.questions button { padding: 0 6px; font-size: 12px; margin-left: 4px; vertical-align: baseline; color: var(--accent); }
+
+/* ---------- vocabulary / flashcards ---------- */
+.term-row { align-items: flex-start; }
+.term-row .pl { font-weight: 600; }
+.term-row .pl .muted { font-weight: 400; }
+.term-row button.ghost .ic, .fc-actions .ic { width: 18px; height: 18px; }
+.fc-top { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.fc-top .progressbar { flex: 1; margin: 0; }
+.flash {
+  width: 100%; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 28px 20px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); text-align: center; font-weight: 400;
+}
+.flash:hover { background: var(--surface); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.flash.back { background: var(--accent-soft); }
+.flash .big { font-size: 24px; font-weight: 600; line-height: 1.3; }
+.flash > .muted:not(.small) { max-width: 52ch; font-size: 15px; }
+.flash.done { gap: 6px; }
+.fc-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.fc-hint { display: none; }
+@media (hover: hover) { .fc-hint { display: block; } }
+
+/* ---------- transcript follows audio ---------- */
+.transcript p { padding: 4px 8px; margin: 0 -8px 6px; border-radius: 6px; transition: background .2s; }
+.transcript p.now { background: var(--accent-soft); }
+
+/* ---------- search ---------- */
+.searchbar { position: relative; }
+.searchbar .ic { position: absolute; left: 11px; top: 50%; width: 18px; height: 18px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.searchbar input { padding-left: 36px; }
+.hit { align-items: flex-start; }
+.hit .mark { margin-top: 6px; }
+.hit a.t { display: block; color: var(--text); }
+.snip { display: block; margin-top: 6px; font-size: 14px; color: var(--text); line-height: 1.45; }
+.snip:hover { text-decoration: none; color: var(--accent); }
+.snip .where { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-right: 6px; }
+mark { background: color-mix(in srgb, #facc15 45%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+/* ---------- print / save as PDF (konspekt) ---------- */
+@media print {
+  :root { --bg: #fff; --surface: #fff; --surface2: #f3f3f5; --text: #000; --muted: #555; --line: #ddd; color-scheme: light; }
+  body { padding: 0 !important; font-size: 12pt; }
+  main { max-width: none; }
+  #tabs, .seg, .sticky, .toc, .toc-fab, #toast, button, .lesson-hero ~ .card, main > .row:first-child, ol.questions button { display: none !important; }
+  .doc { display: block; }
+  .md, .konspekt { max-width: none; }
+  h2 { break-after: avoid; }
+  .diagram, .table-wrap, blockquote { break-inside: avoid; }
+  a { color: inherit; }
+}

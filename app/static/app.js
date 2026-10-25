@@ -730,19 +730,55 @@ window.addEventListener('beforeunload', (e) => {
   if (recorder && !recorder.stopped) { e.preventDefault(); e.returnValue = ''; }
 });
 
+let lessonsQuery = '';
+
 async function viewLessons() {
   const [subjects, lessons] = await Promise.all([loadSubjects(), api('/lessons?limit=300')]);
   let filter = store.get('lessonFilter', 0);
-  const draw = () => {
-    const list = filter ? lessons.filter((l) => l.subject_id === filter) : lessons;
-    app.innerHTML = `<h1>Уроки</h1>
-      <div class="seg"><button data-f="0" class="${!filter ? 'on' : ''}">Усі</button>
-        ${subjects.map((s) => `<button data-f="${s.id}" class="${filter === s.id ? 'on' : ''}">${esc(s.name)}</button>`).join('')}</div>
-      <div class="list">${list.map(lessonCard).join('') || '<div class="empty">Поки що немає уроків.</div>'}</div>`;
+  app.innerHTML = `<h1>Уроки</h1>
+    <div class="searchbar"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" id="q" placeholder="Пошук у конспектах і транскриптах" value="${esc(lessonsQuery)}" autocomplete="off" enterkeyhint="search"></div>
+    <div class="seg" id="filters"></div>
+    <div id="results"></div>`;
+  const results = $('#results');
+  let seq = 0;
+  const draw = async () => {
+    $('#filters').innerHTML = `<button data-f="0" class="${!filter ? 'on' : ''}">Усі</button>
+      ${subjects.map((s) => `<button data-f="${s.id}" class="${filter === s.id ? 'on' : ''}">${esc(s.name)}</button>`).join('')}`;
     $$('[data-f]').forEach((b) => b.onclick = () => { filter = +b.dataset.f; store.set('lessonFilter', filter); draw(); });
+    const q = lessonsQuery.trim();
+    if (q.length < 2) {
+      const list = filter ? lessons.filter((l) => l.subject_id === filter) : lessons;
+      results.innerHTML = `<div class="list">${list.map(lessonCard).join('') || '<div class="empty">Поки що немає уроків.</div>'}</div>`;
+      return;
+    }
+    const my = ++seq;
+    const hits = await api(`/search?q=${encodeURIComponent(q)}${filter ? '&subject_id=' + filter : ''}`);
+    if (my !== seq) return; // a newer query already answered
+    results.innerHTML = `<p class="muted small">${hits.length ? `Знайдено в ${hits.length} урок.` : 'Нічого не знайдено.'}</p>
+      <div class="list">${hits.map(searchHit).join('')}</div>`;
+    $$('[data-open]', results).forEach((a) => a.onclick = () => {
+      const [tab, lang] = a.dataset.open.split(':');
+      store.set('lessonTab', tab);
+      if (lang) store.set('trLang', lang);
+    });
   };
-  draw();
+  let timer;
+  $('#q').oninput = (e) => { lessonsQuery = e.target.value; clearTimeout(timer); timer = setTimeout(draw, 250); };
+  await draw();
   if (lessons.some((l) => l.status === 'queued' || l.status === 'processing')) poll(viewLessons, 6000);
+}
+
+const hl = (s) => esc(s).replace(/\[\[/g, '<mark>').replace(/\]\]/g, '</mark>');
+
+function searchHit(h) {
+  const where = { summary: 'Конспект', pl: 'Транскрипт', uk: 'Транскрипт (UK)' };
+  return `<div class="item hit">${mark(h.subject_color)}<div class="main">
+      <a class="t" href="#/lesson/${h.lesson_id}" data-open="summary">${esc(h.title || 'Урок')}</a>
+      <div class="meta">${esc(h.subject_name || 'Без предмета')} · ${fmtDate(h.recorded_at)}</div>
+      ${h.snippets.map((x) => `<a class="snip" href="#/lesson/${h.lesson_id}" data-open="${x.where === 'summary' ? 'summary' : 'transcript:' + x.where}">
+        <span class="where">${where[x.where] || ''}</span>${hl(x.text)}</a>`).join('')}
+    </div></div>`;
 }
 
 async function viewLesson(id) {
@@ -775,24 +811,27 @@ async function viewLesson(id) {
       <div id="tabbody"></div>` : ''}`;
 
   const body = $('#tabbody');
-  const drawTab = (t) => {
+  const drawTab = (t, question = null) => {
     store.set('lessonTab', t);
     $$('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     if (t === 'summary') {
-      body.innerHTML = l.analysis ? `
+      body.innerHTML = l.analysis ? `<div class="doc"><div class="doc-main">
         ${a.announcements?.length ? `<div class="card warn"><b>Важливо</b><ul>${a.announcements.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
         ${a.key_points?.length ? `<h2>Najważniejsze</h2><ul class="points">${a.key_points.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
         <h2>Konspekt</h2><div class="md konspekt">${md(a.summary)}</div>
         ${a.explanation ? `<h2>Пояснення українською</h2><div class="md">${md(a.explanation)}</div>` : ''}
-        ${a.review_questions?.length ? `<h2>Sprawdź się</h2><ol class="points">${a.review_questions.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}
-      ` : '<p class="muted">Аналіз ще не готовий.</p>';
+        ${a.review_questions?.length ? `<h2>Sprawdź się</h2><ol class="points questions">${a.review_questions.map((x, i) => `<li>${esc(x)}
+          <button class="ghost small" data-q="${i}">Відповідь</button></li>`).join('')}</ol>` : ''}
+        </div><nav class="toc" aria-label="Зміст"></nav></div>` : '<p class="muted">Аналіз ще не готовий.</p>';
       enhance(body);
+      buildToc(body);
+      $$('[data-q]', body).forEach((b) => b.onclick = () =>
+        drawTab('chat', `Дай коротку відповідь на питання з цього уроку: «${a.review_questions[+b.dataset.q]}»`));
     } else if (t === 'homework') {
       body.innerHTML = l.homework.length ? l.homework.map(hwItem).join('') : '<p class="muted">На цьому уроці домашнього не задавали (або AI його не почув).</p>';
       bindHomework(body);
     } else if (t === 'terms') {
-      body.innerHTML = a.terms?.length ? `<div class="card">${a.terms.map((x) => `<div class="term"><div class="pl">${esc(x.pl)} — ${esc(x.uk)}</div>
-        <div class="muted small">${esc(x.explanation)}</div></div>`).join('')}</div>` : '<p class="muted">Немає термінів.</p>';
+      renderTerms(body, a.terms || []);
     } else if (t === 'transcript') {
       let lang = store.get('trLang', l.transcript_uk ? 'uk' : 'pl');
       const drawTr = () => {
@@ -806,11 +845,12 @@ async function viewLesson(id) {
           const p = $('#player');
           if (p) { p.currentTime = +s.dataset.t; p.play(); }
         });
+        followAudio(body);
       };
       drawTr();
     } else if (t === 'chat') {
       if (!l.subject_id) { body.innerHTML = '<p class="muted">Призначте уроку предмет, щоб питати AI.</p>'; return; }
-      renderChat(body, l.subject_id, l.id, 'Наприклад: «Поясни простіше, що таке…» або «Що треба вивчити до контрольної?»');
+      renderChat(body, l.subject_id, l.id, 'Наприклад: «Поясни простіше, що таке…» або «Що треба вивчити до контрольної?»', question);
     }
   };
   if (body) {
@@ -826,7 +866,11 @@ async function viewLesson(id) {
     await sleep(800);
     viewLesson(id);
   };
-  $('#menu').onclick = () => lessonMenu(l);
+  $('#menu').onclick = () => lessonMenu(l, () => {
+    if (body && store.get('lessonTab') !== 'summary') drawTab('summary');
+    // Give mermaid a moment to finish drawing before the print dialog snapshots the page.
+    setTimeout(() => window.print(), 600);
+  });
   if (busy || (l.status === 'recording' && store.get('activeRec')?.lessonId !== l.id)) poll(() => viewLesson(id), 5000, true);
 }
 
@@ -840,7 +884,151 @@ function transcriptHtml(text) {
   }).join('');
 }
 
-function lessonMenu(l) {
+// Side table of contents for the konspekt: sticky column on wide screens, a sheet behind a button on phones.
+function buildToc(root) {
+  const nav = $('.toc', root);
+  const main = $('.doc-main', root);
+  if (!nav || !main) return;
+  const heads = $$(':scope > h2, .md h1, .md h2, .md h3', main).filter((h) => h.textContent.trim());
+  if (heads.length < 3) { nav.remove(); return; }
+  const level = (h) => (h.parentElement === main ? 1 : h.tagName === 'H3' ? 3 : 2);
+  heads.forEach((h, i) => { h.id = 'sec-' + i; });
+  const links = heads.map((h, i) => `<a href="#" data-sec="${i}" class="l${level(h)}">${esc(h.textContent.trim())}</a>`).join('');
+  nav.innerHTML = `<div class="label">Зміст</div>${links}`;
+  const fab = document.createElement('button');
+  fab.className = 'toc-fab';
+  fab.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M8 12h12M8 18h12"/></svg>Зміст';
+  root.appendChild(fab);
+
+  const jump = (i) => heads[+i].scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  $$('[data-sec]', nav).forEach((a) => a.onclick = (e) => { e.preventDefault(); jump(a.dataset.sec); });
+  fab.onclick = () => {
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = `<div class="modal toc-sheet"><nav class="toc-list">${nav.innerHTML}</nav></div>`;
+    $$('[data-sec]', bg).forEach((a) => {
+      a.classList.toggle('on', a.dataset.sec === String(current));
+      a.onclick = (e) => { e.preventDefault(); bg.remove(); jump(a.dataset.sec); };
+    });
+    bg.onclick = (e) => { if (e.target === bg) bg.remove(); };
+    document.body.appendChild(bg);
+  };
+
+  // Scroll spy: highlight the section currently at the top of the screen.
+  let current = -1, queued = false;
+  const spy = () => {
+    queued = false;
+    if (!nav.isConnected) { removeEventListener('scroll', onScroll); fab.remove(); return; }
+    const line = 110;
+    let idx = 0;
+    heads.forEach((h, i) => { if (h.getBoundingClientRect().top < line) idx = i; });
+    if (idx === current) return;
+    current = idx;
+    $$('[data-sec]', nav).forEach((a) => a.classList.toggle('on', +a.dataset.sec === idx));
+    const on = $('.on', nav);
+    if (on && nav.scrollHeight > nav.clientHeight) on.scrollIntoView({ block: 'nearest' });
+  };
+  const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(spy); } };
+  addEventListener('scroll', onScroll, { passive: true });
+  spy();
+}
+
+// Vocabulary: plain list or flip cards, with Polish pronunciation through the browser's speech engine.
+function speak(text) {
+  if (!window.speechSynthesis) return toast('Цей браузер не вміє озвучувати текст');
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'pl-PL';
+  u.voice = speechSynthesis.getVoices().find((v) => v.lang.replace('_', '-').startsWith('pl')) || null;
+  u.rate = 0.9;
+  speechSynthesis.speak(u);
+}
+
+const SPEAKER = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+
+function renderTerms(el, terms) {
+  if (!terms.length) { el.innerHTML = '<p class="muted">Немає термінів.</p>'; return; }
+  let mode = store.get('termsMode', 'list');
+  let order = terms.map((_, i) => i), pos = 0, flipped = false, again = [];
+  const draw = () => {
+    store.set('termsMode', mode);
+    const head = `<div class="seg" style="margin-top:0">
+        <button data-m="list" class="${mode === 'list' ? 'on' : ''}">Список</button>
+        <button data-m="cards" class="${mode === 'cards' ? 'on' : ''}">Картки</button></div>`;
+    if (mode === 'list') {
+      el.innerHTML = head + `<div class="list">${terms.map((x, i) => `<div class="item term-row">
+        <div class="main"><div class="pl">${esc(x.pl)} <span class="muted">— ${esc(x.uk)}</span></div>
+        ${x.explanation ? `<div class="muted small">${esc(x.explanation)}</div>` : ''}</div>
+        <button class="ghost" data-say="${i}" aria-label="Озвучити">${SPEAKER}</button></div>`).join('')}</div>`;
+    } else if (pos >= order.length) {
+      el.innerHTML = head + `<div class="flash done"><div class="big">Готово</div>
+        <p class="muted">${again.length ? `Повторити ще раз: ${again.length} з ${terms.length}` : 'Усі слова знаєш.'}</p>
+        <div class="row wrap" style="justify-content:center">${again.length ? '<button class="primary" id="fc-again">Повторити складні</button>' : ''}
+        <button id="fc-restart">Почати спочатку</button></div></div>`;
+    } else {
+      const x = terms[order[pos]];
+      el.innerHTML = head + `<div class="fc-top"><span class="muted small">${pos + 1} / ${order.length}</span>
+          <div class="progressbar"><div style="width:${100 * pos / order.length}%"></div></div>
+          <button class="ghost small" id="fc-shuffle">Перемішати</button></div>
+        <button class="flash ${flipped ? 'back' : ''}" id="fc-card" aria-live="polite">
+          <span class="big">${esc(flipped ? x.uk : x.pl)}</span>
+          ${flipped && x.explanation ? `<span class="muted">${esc(x.explanation)}</span>` : ''}
+          ${flipped ? `<span class="muted small">PL: ${esc(x.pl)}</span>` : '<span class="muted small">Натисни, щоб побачити переклад</span>'}
+        </button>
+        <div class="fc-actions">
+          <button data-say="${order[pos]}">${SPEAKER}Озвучити</button>
+          <span class="spacer"></span>
+          <button id="fc-no">Ще не знаю</button><button class="primary" id="fc-yes">Знаю</button>
+        </div>
+        <p class="muted small fc-hint">Клавіші: пробіл — перевернути, ← не знаю, → знаю.</p>`;
+    }
+    $$('[data-m]', el).forEach((b) => b.onclick = () => { mode = b.dataset.m; draw(); });
+    $$('[data-say]', el).forEach((b) => b.onclick = () => speak(terms[+b.dataset.say].pl));
+    const next = (known) => { if (!known) again.push(order[pos]); pos++; flipped = false; draw(); };
+    if ($('#fc-card', el)) {
+      $('#fc-card', el).onclick = () => { flipped = !flipped; draw(); };
+      $('#fc-yes', el).onclick = () => next(true);
+      $('#fc-no', el).onclick = () => next(false);
+      $('#fc-shuffle', el).onclick = () => { order = order.slice(pos).sort(() => Math.random() - 0.5); pos = 0; flipped = false; draw(); };
+    }
+    if ($('#fc-again', el)) $('#fc-again', el).onclick = () => { order = again; again = []; pos = 0; draw(); };
+    if ($('#fc-restart', el)) $('#fc-restart', el).onclick = () => { order = terms.map((_, i) => i); again = []; pos = 0; draw(); };
+  };
+  const onKey = (e) => {
+    if (!el.isConnected) { removeEventListener('keydown', onKey); return; }
+    if (mode !== 'cards' || pos >= order.length || e.target.matches('input, textarea, select')) return;
+    if (e.key === ' ') { e.preventDefault(); flipped = !flipped; draw(); }
+    else if (e.key === 'ArrowRight') $('#fc-yes', el)?.click();
+    else if (e.key === 'ArrowLeft') $('#fc-no', el)?.click();
+  };
+  addEventListener('keydown', onKey);
+  draw();
+}
+
+// Transcript follows the audio: the paragraph being played is highlighted and kept in view.
+function followAudio(el) {
+  const p = $('#player');
+  const paras = $$('.transcript p', el).filter((x) => $('.ts', x));
+  if (!p || !paras.length) return;
+  const times = paras.map((x) => +$('.ts', x).dataset.t);
+  let cur = -1;
+  const sync = () => {
+    if (!el.isConnected) { p.removeEventListener('timeupdate', sync); return; }
+    let i = -1;
+    times.forEach((t, k) => { if (t <= p.currentTime + 0.5) i = k; });
+    if (i === cur) return;
+    paras[cur]?.classList.remove('now');
+    cur = i;
+    if (i < 0) return;
+    paras[i].classList.add('now');
+    const r = paras[i].getBoundingClientRect();
+    if (!p.paused && (r.top < 90 || r.bottom > innerHeight - 90)) paras[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
+  p.addEventListener('timeupdate', sync);
+  sync();
+}
+
+function lessonMenu(l, onPrint) {
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
   bg.innerHTML = `<div class="modal">
@@ -848,6 +1036,8 @@ function lessonMenu(l) {
     <label>Предмет</label><select id="m-subj">${subjectsCache.map((s) => `<option value="${s.id}" ${s.id === l.subject_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
     <div class="row" style="margin-top:14px"><button class="primary" id="m-save">Зберегти</button><span class="spacer"></span><button id="m-close">Закрити</button></div>
     <div class="row wrap" style="margin-top:20px">
+      <button id="m-print">Друк / PDF</button>
+      <button id="m-copy">Копіювати конспект</button>
       <button id="m-reanalyze">Переробити AI-аналіз</button>
       <button id="m-full">Розпізнати заново</button>
       <button class="danger" id="m-del">Видалити урок</button>
@@ -859,6 +1049,15 @@ function lessonMenu(l) {
   $('#m-save', bg).onclick = async () => {
     await api('/lessons/' + l.id, { method: 'PATCH', json: { title: $('#m-title', bg).value, subject_id: +$('#m-subj', bg).value } });
     close(); viewLesson(l.id);
+  };
+  $('#m-print', bg).onclick = () => { close(); onPrint(); };
+  $('#m-copy', bg).onclick = async () => {
+    const a = l.analysis || {};
+    const parts = [`# ${l.title || a.title || 'Урок'}`, a.summary || ''];
+    if (a.terms?.length) parts.push('## Słowa\n\n' + a.terms.map((x) => `- **${x.pl}** — ${x.uk}`).join('\n'));
+    try { await navigator.clipboard.writeText(parts.join('\n\n')); toast('Конспект скопійовано (Markdown)'); }
+    catch { toast('Не вдалося скопіювати'); }
+    close();
   };
   $('#m-reanalyze', bg).onclick = async () => {
     // Keep the transcript, redo summary/homework/translation.
@@ -961,7 +1160,7 @@ async function viewSubject(id) {
   draw();
 }
 
-async function renderChat(el, subjectId, lessonId, placeholder) {
+async function renderChat(el, subjectId, lessonId, placeholder, question = null) {
   const q = lessonId ? '?lesson_id=' + lessonId : '';
   const history = await api(`/subjects/${subjectId}/chat${q}`);
   el.innerHTML = `<div class="chat" id="msgs"></div>
@@ -1001,6 +1200,8 @@ async function renderChat(el, subjectId, lessonId, placeholder) {
     wait.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   $('#send', el).onclick = send;
+  ask.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(hover: hover)').matches) { e.preventDefault(); send(); } };
+  if (question) { ask.value = question; send(); }
   if ($('#clear', el)) $('#clear', el).onclick = async () => {
     if (!confirm('Очистити історію чату?')) return;
     await api(`/subjects/${subjectId}/chat${q}`, { method: 'DELETE' });
@@ -1016,7 +1217,7 @@ function poll(fn, ms, keepScroll = false) {
   pollTimer = setTimeout(async () => {
     if (location.hash !== hash || recorder || document.querySelector('.modal-bg')) return poll(fn, ms, keepScroll);
     // Do not redraw while the user is typing a question.
-    if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') return poll(fn, ms, keepScroll);
+    if (document.activeElement?.matches('textarea, input[type=search]')) return poll(fn, ms, keepScroll);
     const y = scrollY;
     await fn();
     if (keepScroll) scrollTo(0, y);
