@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import shutil
+import unicodedata
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -237,6 +238,75 @@ def lesson_audio(lid: int):
     if not path.exists():
         raise HTTPException(404, "Аудіо ще не готове")
     return FileResponse(path, media_type="audio/mp4")
+
+
+# ---------- search ----------
+
+def _fold(text: str) -> str:
+    """Lowercase and strip accents char by char, so positions in the folded text match the original."""
+    return "".join((unicodedata.normalize("NFKD", ch.lower())[:1] or ch) for ch in text).replace("ł", "l")
+
+
+def _snippet(text: str, words: list[str], width: int = 90) -> str | None:
+    folded = _fold(text)
+    if not all(w in folded for w in words):
+        return None
+    pos = min(folded.find(w) for w in words)
+    start, end = max(0, pos - width // 3), min(len(text), pos + width)
+    spans = sorted((m.start(), m.end()) for w in words for m in re.finditer(re.escape(w), folded[start:end]))
+    out, last = [], 0
+    for a, b in spans:
+        if a < last:
+            continue
+        out += [text[start + last:start + a], "[[", text[start + a:start + b], "]]"]
+        last = b
+    out.append(text[start + last:end])
+    snip = re.sub(r"\s+", " ", "".join(out)).strip()
+    return ("…" if start else "") + snip + ("…" if end < len(text) else "")
+
+
+@api.get("/search")
+def search(q: str, subject_id: int | None = None, limit: int = 30):
+    """Find lessons by words in the konspekt/terms (exact substring) and transcripts (FTS, prefix match)."""
+    words = [w for w in re.findall(r"\w+", _fold(q)) if len(w) > 1][:8]
+    if not words:
+        return []
+    where, args = ("AND l.subject_id=?", [subject_id]) if subject_id else ("", [])
+    hits: dict[int, dict] = {}
+
+    def hit(r):
+        return hits.setdefault(r["id"], {"lesson_id": r["id"], "title": r["title"], "recorded_at": r["recorded_at"],
+                                         "subject_name": r["subject_name"], "subject_color": r["subject_color"],
+                                         "snippets": []})
+
+    for r in db.all_(f"""SELECT l.id, l.title, l.recorded_at, l.analysis, s.name AS subject_name, s.color AS subject_color
+                         FROM lessons l LEFT JOIN subjects s ON s.id=l.subject_id
+                         WHERE l.analysis IS NOT NULL {where} ORDER BY l.recorded_at DESC""", *args):
+        a = json.loads(r["analysis"])
+        terms = [f"{t.get('pl', '')} — {t.get('uk', '')}" for t in a.get("terms") or []]
+        body = "\n".join([r["title"] or "", a.get("summary") or "", *(a.get("key_points") or []), *terms,
+                          a.get("explanation") or ""])
+        body = re.sub(r"```mermaid.*?```|[#*>|`]", " ", body, flags=re.S)
+        snip = _snippet(body, words)
+        if snip:
+            hit(r)["snippets"].append({"where": "summary", "text": snip})
+
+    # FTS folds diacritics itself (except ł), so it gets the words as typed.
+    fts = " ".join(f'"{w}"*' for w in re.findall(r"\w+", q.lower()) if len(w) > 1)
+    try:
+        rows = db.all_(f"""SELECT l.id, l.title, l.recorded_at, s.name AS subject_name, s.color AS subject_color, p.lang,
+                           snippet(passages, 0, '[[', ']]', '…', 16) AS snip
+                           FROM passages p JOIN lessons l ON l.id=p.lesson_id LEFT JOIN subjects s ON s.id=l.subject_id
+                           WHERE passages MATCH ? {where} ORDER BY bm25(passages) LIMIT 80""", fts, *args)
+    except Exception:  # noqa: BLE001 - odd input must not break the page
+        log.warning("search failed: %s", fts, exc_info=True)
+        rows = []
+    for r in rows:
+        h = hit(r)
+        if sum(x["where"] != "summary" for x in h["snippets"]) < 2:
+            text = re.sub(r"\[\d{1,3}:\d{2}\]\s*", "", r["snip"]).strip()
+            h["snippets"].append({"where": r["lang"], "text": text})
+    return list(hits.values())[:limit]
 
 
 # ---------- dashboard ----------
