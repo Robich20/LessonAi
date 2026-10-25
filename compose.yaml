@@ -1,0 +1,42 @@
+# Compose for Arcane (Git project): the image is built by GitHub Actions and pulled from ghcr.io;
+# all lessons are kept in ./data next to this file. Secrets live only in .env (edited in Arcane).
+# See DEPLOY_ARCANE.md.
+services:
+  lessonai:
+    image: ghcr.io/robich20/lessonai:latest
+    pull_policy: always
+    container_name: lessonai
+    restart: unless-stopped
+    labels:
+      # Lets Arcane's auto-update replace this container when a new :latest image appears in ghcr.io
+      com.getarcaneapp.arcane.updater: "true"
+    init: true
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+    volumes:
+      - ./data:/data
+    ports:
+      - "${HOST_PORT:-8010}:8000"
+    stop_grace_period: 1m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
+      interval: 1m
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # Optional: Cloudflare Tunnel in the same project (then you can remove "ports" above).
+  # Uncomment, add TUNNEL_TOKEN to .env, and in Cloudflare point the public hostname to http://lessonai:8000
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   environment:
+  #     TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+  #   depends_on: [lessonai]

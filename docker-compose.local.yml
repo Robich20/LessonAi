@@ -1,0 +1,17 @@
+# Local run without a domain: http://localhost:8000
+# (localhost counts as a secure origin, so recording works in the desktop browser; iPhone needs HTTPS)
+#   docker compose -f docker-compose.local.yml up -d --build
+services:
+  app:
+    build:
+      context: .
+      args:
+        LOCAL_WHISPER: ${LOCAL_WHISPER:-false}
+    env_file: .env
+    environment:
+      APP_URL: http://localhost:${HOST_PORT:-8000}
+    volumes:
+      - ./data:/data
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    restart: unless-stopped

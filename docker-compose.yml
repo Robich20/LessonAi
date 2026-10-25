@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        LOCAL_WHISPER: ${LOCAL_WHISPER:-false}
+    env_file: .env
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    # Without the caddy service (e.g. behind your own proxy / Tailscale), publish the port directly:
+    # ports: ["8000:8000"]
+
+  # HTTPS is required: iPhone Safari only allows microphone access on https:// pages.
+  # Caddy gets a free Let's Encrypt certificate automatically for DOMAIN.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+
+volumes:
+  caddy_data:
+  caddy_config:
